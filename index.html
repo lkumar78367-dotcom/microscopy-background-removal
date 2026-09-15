@@ -8,7 +8,7 @@
 <meta name="keywords" content="biomedical engineering, medical imaging, image processing, phase contrast microscopy, DIC microscopy, Python, TensorFlow, OpenCV, U-Net, computer vision, image segmentation, background removal, research project">
 <meta name="author" content="Lokeshkumar Rajagopal">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
-<link rel="stylesheet" href="css/style.css">
+<link rel="stylesheet" href="style.css">
 </head>
 <body>
 <div class="wrap">
@@ -44,7 +44,7 @@
     <p>Background here means the slowly varying part: lamp falloff, shadowing, gradient bias. Signal means cell bodies, boundaries and internal structure &mdash; higher spatial frequency and spatially localised. The difficulty is that halo artefacts sit right at cell edges, close to the signal in both space and frequency, so a simple high-pass filter removes the cells along with the lamp.</p>
   </div>
   <figure>
-    <img src="assets/fig-problem.jpg" alt="Two microscopy panels side by side: the original normalised field of view with a visible brightness gradient, and the same field after background correction with a flat background.">
+    <img src="fig-problem.jpg" alt="Two microscopy panels side by side: the original normalised field of view with a visible brightness gradient, and the same field after background correction with a flat background.">
     <figcaption><b>Left:</b> original field of view, normalised. The lower-centre region is measurably brighter than the corners. <b>Right:</b> the same field after background correction &mdash; the gradient is gone and the cells are unchanged. <span class="mono">Thesis Figure 1.</span></figcaption>
   </figure>
 </section>
@@ -145,11 +145,11 @@
   </div>
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:24px;margin-top:26px">
     <figure>
-      <img src="assets/fig-rolling-ball.jpg" alt="Original grayscale microscopy image beside a rolling-ball background-subtracted version showing circular artefacts.">
+      <img src="fig-rolling-ball.jpg" alt="Original grayscale microscopy image beside a rolling-ball background-subtracted version showing circular artefacts.">
       <figcaption><b>Rolling ball.</b> The circular artefacts are the ball radius becoming visible where the background estimate fits the image too closely. <span class="mono">Thesis Figure 2.</span></figcaption>
     </figure>
     <figure>
-      <img src="assets/fig-morphological.jpg" alt="Two panels showing morphological opening and closing applied to the same microscopy field.">
+      <img src="fig-morphological.jpg" alt="Two panels showing morphological opening and closing applied to the same microscopy field.">
       <figcaption><b>Morphological operations.</b> Opening and closing on the same field &mdash; boundaries sharpen, faint structure thins. <span class="mono">Thesis Figure 3.</span></figcaption>
     </figure>
   </div>
@@ -169,17 +169,17 @@
   <div class="triptych">
     <figure>
       <div class="step"><b>1</b> Input</div>
-      <img src="assets/unet-original.jpg" alt="Phase contrast microscopy field of view, normalised, with a visible illumination gradient across the frame.">
+      <img src="unet-original.jpg" alt="Phase contrast microscopy field of view, normalised, with a visible illumination gradient across the frame.">
       <figcaption>Original field of view, normalised. <span class="mono">Thesis Figure 4.</span></figcaption>
     </figure>
     <figure>
       <div class="step"><b>2</b> Reference / target</div>
-      <img src="assets/unet-reference.jpg" alt="The same microscopy field of view after background correction, with a flat background.">
+      <img src="unet-reference.jpg" alt="The same microscopy field of view after background correction, with a flat background.">
       <figcaption>The per-field-of-view reference the methods are scored against. <span class="mono">Thesis Figure 1.</span></figcaption>
     </figure>
     <figure>
       <div class="step"><b>3</b> U-Net output</div>
-      <img src="assets/unet-output.jpg" alt="Binary foreground mask predicted by the U-Net, cells in white on a black background.">
+      <img src="unet-output.jpg" alt="Binary foreground mask predicted by the U-Net, cells in white on a black background.">
       <figcaption>Predicted foreground, thresholded at 0.5. <span class="mono">Thesis Figure 4.</span></figcaption>
     </figure>
   </div>
@@ -464,6 +464,6 @@ python src/run_comparison.py --data data/miniglioma_usiigaci/test --out results/
 </footer>
 
 </div>
-<script src="js/demo.js"></script>
+<script src="demo.js"></script>
 </body>
 </html>
