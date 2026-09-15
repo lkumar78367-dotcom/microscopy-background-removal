@@ -281,5 +281,5 @@ $('upload').addEventListener('change',function(e){
   const f=e.target.files&&e.target.files[0]; if(!f) return;
   const fr=new FileReader(); fr.onload=ev=>loadImage(ev.target.result); fr.readAsDataURL(f);
 });
-loadImage("assets/sample.jpg");
+loadImage("sample.jpg");
 })();
