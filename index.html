@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DIC Microscopy Background Removal</title>
+<meta name="description" content="MSc thesis project: comparing classical and U-Net background removal for phase contrast and DIC microscopy images, with the classical methods running live in the browser.">
+<meta name="keywords" content="biomedical engineering, medical imaging, image processing, phase contrast microscopy, DIC microscopy, Python, TensorFlow, OpenCV, U-Net, computer vision, image segmentation, background removal, research project">
+<meta name="author" content="Lokeshkumar Rajagopal">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div class="wrap">
+
+<section class="hero">
+  <div class="kicker">MSc Biomedical Engineering &middot; University of Strathclyde &middot; 2024&ndash;2025</div>
+  <h1>Efficient Background Removal for Phase Contrast and DIC Microscopy Images</h1>
+  <p class="lede">Phase contrast and DIC microscopes turn optical path differences into brightness &mdash; which means they also turn uneven illumination into brightness, and automated analysis ends up measuring the lamp instead of the cells.</p>
+  <p class="sub">This project compares classical background-correction methods against a retrained U-Net on the same microscopy dataset, scored with PSNR and SSIM against acceptance criteria fixed before the experiment was run. The tool below runs the classical methods on a real field of view in your browser.</p>
+  <div class="btns">
+    <a class="btn primary" href="#demo">Try the method</a>
+    <a class="btn" href="#results">See the results</a>
+    <a class="btn" href="https://github.com/lokesh-rajagopal/microscopy-background-removal" target="_blank" rel="noopener">Code on GitHub</a>
+  </div>
+  <div class="meta">
+    <span>Python &middot; TensorFlow 2.15 &middot; OpenCV &middot; scikit-image</span>
+    <span>U-Net &middot; 28.4 &plusmn; 0.9 dB PSNR &middot; 0.86 SSIM</span>
+  </div>
+</section>
+
+<section>
+  <div class="head"><div class="eyebrow">Overview &mdash; thesis &sect;1.4</div><h2>What the project set out to do</h2></div>
+  <div class="prose">
+    <p>Phase contrast and DIC microscopy image living, unstained cells. No dyes, no fixation, no phototoxicity &mdash; which is exactly why they are used for live-cell work. Both convert optical path length differences into intensity, so a cell that is invisible under brightfield becomes visible.</p>
+    <p>The same physics creates the problem. Uneven lamp illumination, halo artefacts at cell edges, and a slowly varying gradient across the field of view all arrive as intensity too, and a segmentation algorithm cannot tell them apart from biology. Background removal is the preprocessing step that decides whether everything downstream is measuring cells or measuring light.</p>
+    <p>The aim was to evaluate classical and AI-based background removal on the same data. Four objectives: implement the classical methods, train a U-Net, compare them using PSNR and SSIM, and assess the effect on image analysis.</p>
+  </div>
+</section>
+
+<section>
+  <div class="head"><div class="eyebrow">The problem &mdash; thesis &sect;2.2.3</div><h2>Illumination is not background noise</h2></div>
+  <div class="prose" style="margin-bottom:22px">
+    <p>Background here means the slowly varying part: lamp falloff, shadowing, gradient bias. Signal means cell bodies, boundaries and internal structure &mdash; higher spatial frequency and spatially localised. The difficulty is that halo artefacts sit right at cell edges, close to the signal in both space and frequency, so a simple high-pass filter removes the cells along with the lamp.</p>
+  </div>
+  <figure>
+    <img src="assets/fig-problem.jpg" alt="Two microscopy panels side by side: the original normalised field of view with a visible brightness gradient, and the same field after background correction with a flat background.">
+    <figcaption><b>Left:</b> original field of view, normalised. The lower-centre region is measurably brighter than the corners. <b>Right:</b> the same field after background correction &mdash; the gradient is gone and the cells are unchanged. <span class="mono">Thesis Figure 1.</span></figcaption>
+  </figure>
+</section>
+
+<section id="demo">
+  <div class="head">
+    <div class="eyebrow">Interactive</div>
+    <span class="status live"><span class="dot"></span>Live &mdash; runs in your browser</span>
+    <h2>Run the correction on a real field of view</h2>
+  </div>
+  <div class="prose" style="margin-bottom:20px">
+    <p>Everything below is computed in your browser, now, on the image shown. Choose a method, move its parameter, and watch PSNR and SSIM respond &mdash; the parameter sensitivity that makes the classical methods hard to deploy is the thing you can feel here. Load one of your own microscopy images to see how it behaves on data it was never tuned for.</p>
+  </div>
+
+  <div class="tool">
+    <div class="toolbar">
+      <div class="field">
+        <label for="method">Method</label>
+        <select id="method">
+          <option value="rb">Rolling ball (background subtraction)</option>
+          <option value="th">White top-hat (morphological)</option>
+          <option value="bw">Butterworth high-pass</option>
+          <option value="ref">Reference construction (&sect;2.5.1)</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="param" id="plabel">Radius</label>
+        <div class="rangerow">
+          <input type="range" id="param" min="5" max="90" value="50" step="1">
+          <span class="rangeval" id="pval">50 px</span>
+        </div>
+      </div>
+      <div class="field">
+        <label for="upload">Your own image</label>
+        <input type="file" id="upload" accept="image/*">
+      </div>
+    </div>
+
+    <div class="canvases">
+      <div class="cw"><h3>Input &mdash; 256 &times; 256</h3><canvas id="cin" width="256" height="256"></canvas></div>
+      <div class="cw"><h3 id="outlabel">Corrected</h3><canvas id="cout" width="256" height="256"></canvas></div>
+    </div>
+
+    <div class="readout">
+      <div class="stat"><span class="k">PSNR</span><span class="v" id="mpsnr">&mdash;</span><span class="n">threshold &ge; 26 dB</span></div>
+      <div class="stat"><span class="k">SSIM</span><span class="v" id="mssim">&mdash;</span><span class="n">threshold &ge; 0.80</span></div>
+      <div class="stat"><span class="k">Against criteria</span><span class="v" id="mverdict" style="font-size:1rem;padding-top:6px">&mdash;</span><span class="n" id="mtime">&nbsp;</span></div>
+    </div>
+  </div>
+
+  <div class="note" style="margin-top:18px">
+    <b>What these numbers are.</b> They are computed live on the single image above, scored against the per-field-of-view reference built by the protocol in &sect;2.5.1. They are <b>not</b> the thesis results, which were measured across a held-out test set and appear in the Results section below. The rolling ball is approximated with a separable square structuring element so it runs at interactive speed; the thesis used a disk. <b>The U-Net is not available here</b> &mdash; the trained weights were not published with the project, so its recorded output is shown as a figure rather than computed in your browser.
+  </div>
+</section>
+
+<section>
+  <div class="head"><div class="eyebrow">Methods &mdash; thesis &sect;2.3&ndash;2.4</div><h2>Four approaches to the same estimate</h2></div>
+  <div class="prose" style="margin-bottom:22px">
+    <p>Every method here is trying to answer one question: which part of this image is the lamp? They differ in what they assume the lamp looks like.</p>
+  </div>
+  <div class="grid2">
+    <div class="card">
+      <h3>Rolling ball <span class="tag">classical &middot; scored</span></h3>
+      <dl>
+        <dt>Principle</dt><dd>Estimates the background as the surface traced by a ball of fixed radius rolled beneath the greyscale intensity surface, then subtracts it.</dd>
+        <dt>Why included</dt><dd>The standard baseline for uneven illumination in microscopy; implemented with OpenCV and scikit-image.</dd>
+        <dt>Advantage</dt><dd>Fast, no training data, corrects a global illumination gradient well.</dd>
+        <dt>Limitation</dt><dd>The background is estimated from the image itself, so low-contrast structures are absorbed into the estimate and removed with it.</dd>
+      </dl>
+    </div>
+    <div class="card">
+      <h3>Morphological filtering <span class="tag">classical &middot; scored</span></h3>
+      <dl>
+        <dt>Principle</dt><dd>Erosion, dilation, opening and closing via OpenCV; white top-hat keeps structures smaller than the structuring element and discards everything larger.</dd>
+        <dt>Why included</dt><dd>Operates on local structure rather than a single global surface, so it separates objects the rolling ball merges into background.</dd>
+        <dt>Advantage</dt><dd>Improves object boundary detectability and structure separability.</dd>
+        <dt>Limitation</dt><dd>Over-filtering costs weak cell detail; high-frequency content is amplified indiscriminately, noise included.</dd>
+      </dl>
+    </div>
+    <div class="card">
+      <h3>Butterworth high-pass <span class="tag">classical &middot; not scored</span></h3>
+      <dl>
+        <dt>Principle</dt><dd>Frequency-domain high-pass filter, order 2, cutoff f<sub>c</sub> &asymp; 0.05, removing the low spatial frequencies the illumination occupies.</dd>
+        <dt>Why included</dt><dd>Listed in the thesis among the background estimators explored during the parameter study.</dd>
+        <dt>Advantage</dt><dd>Attacks the gradient directly in the domain where it is compact.</dd>
+        <dt>Limitation</dt><dd>It does not appear in the thesis results table &mdash; only rolling ball, white top-hat and the U-Net were carried through to the PSNR/SSIM comparison. It is included in the tool above for completeness, not as a reported result.</dd>
+      </dl>
+    </div>
+    <div class="card">
+      <h3>U-Net <span class="tag">deep learning &middot; scored</span></h3>
+      <dl>
+        <dt>Principle</dt><dd>Five-level encoder&ndash;decoder with skip connections, retrained on the project dataset; predicts foreground probability, thresholded at 0.5 with a 1-px opening and small-hole filling.</dd>
+        <dt>Why included</dt><dd>Learns the foreground/background distinction from examples instead of assuming a model of the background.</dd>
+        <dt>Advantage</dt><dd>Highest accuracy of the three scored methods, and the tightest spread across fields of view.</dd>
+        <dt>Limitation</dt><dd>Needs annotated training data and GPU time. The dataset's composition and quality directly determine output quality.</dd>
+      </dl>
+    </div>
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:24px;margin-top:26px">
+    <figure>
+      <img src="assets/fig-rolling-ball.jpg" alt="Original grayscale microscopy image beside a rolling-ball background-subtracted version showing circular artefacts.">
+      <figcaption><b>Rolling ball.</b> The circular artefacts are the ball radius becoming visible where the background estimate fits the image too closely. <span class="mono">Thesis Figure 2.</span></figcaption>
+    </figure>
+    <figure>
+      <img src="assets/fig-morphological.jpg" alt="Two panels showing morphological opening and closing applied to the same microscopy field.">
+      <figcaption><b>Morphological operations.</b> Opening and closing on the same field &mdash; boundaries sharpen, faint structure thins. <span class="mono">Thesis Figure 3.</span></figcaption>
+    </figure>
+  </div>
+</section>
+
+<section id="unet">
+  <div class="head">
+    <div class="eyebrow">Deep learning &mdash; thesis &sect;2.4 and Table 1</div>
+    <span class="status thesis"><span class="dot"></span>Thesis result &mdash; measured in the MSc experiment, not computed here</span>
+    <h2>The U-Net approach and its result</h2>
+  </div>
+  <div class="prose" style="margin-bottom:24px">
+    <p>Where the classical methods assume a model of what the background looks like, the U-Net learns the foreground/background distinction from labelled examples. It predicts a foreground probability for every pixel, thresholded at 0.5 and cleaned with a 1-pixel opening and small-hole filling.</p>
+    <p>Skip connections are why the architecture suits this problem. The encoder discards spatial precision as it downsamples; concatenating the encoder features back in at each decoder level is what lets the network suppress a broad illumination gradient without also smoothing away cell boundaries.</p>
+  </div>
+
+  <div class="triptych">
+    <figure>
+      <div class="step"><b>1</b> Input</div>
+      <img src="assets/unet-original.jpg" alt="Phase contrast microscopy field of view, normalised, with a visible illumination gradient across the frame.">
+      <figcaption>Original field of view, normalised. <span class="mono">Thesis Figure 4.</span></figcaption>
+    </figure>
+    <figure>
+      <div class="step"><b>2</b> Reference / target</div>
+      <img src="assets/unet-reference.jpg" alt="The same microscopy field of view after background correction, with a flat background.">
+      <figcaption>The per-field-of-view reference the methods are scored against. <span class="mono">Thesis Figure 1.</span></figcaption>
+    </figure>
+    <figure>
+      <div class="step"><b>3</b> U-Net output</div>
+      <img src="assets/unet-output.jpg" alt="Binary foreground mask predicted by the U-Net, cells in white on a black background.">
+      <figcaption>Predicted foreground, thresholded at 0.5. <span class="mono">Thesis Figure 4.</span></figcaption>
+    </figure>
+  </div>
+  <p style="font-size:.84rem;color:var(--muted);margin-top:11px;max-width:80ch">All three panels are the same field of view, taken from the thesis. No residual image is shown: the U-Net output is a binary foreground mask, so subtracting it from a greyscale reference would not produce anything interpretable.</p>
+
+  <div class="bigmetrics">
+    <div><span class="k">PSNR</span><span class="v">28.4 &plusmn; 0.9</span><span class="n">dB &middot; threshold &ge; 26</span></div>
+    <div><span class="k">SSIM</span><span class="v">0.86 &plusmn; 0.02</span><span class="n">threshold &ge; 0.80</span></div>
+    <div><span class="k">Acceptance criteria</span><span class="v" style="font-size:1.15rem;padding-top:9px;display:block"><span class="pill ok">both met</span></span><span class="n">held-out test set, mean &plusmn; SD</span></div>
+  </div>
+
+  <div class="prose" style="margin-top:24px">
+    <p><b>What the result means.</b> The U-Net was the only one of the three scored methods to clear both thresholds. Its spread matters as much as its mean: at &plusmn;0.9 dB and &plusmn;0.02 SSIM it is the tightest of the three, so performance is consistent across fields of view rather than excellent on some and poor on others.</p>
+    <p>What it does not mean is that deep learning is the right answer in general. This cost annotated training data and GPU time, against classical methods that need neither. And it is one dataset, one modality pairing, one magnification &mdash; the thesis is explicit that generalisation to other microscopes and cell types is untested.</p>
+  </div>
+
+  <h3 style="margin-top:32px;margin-bottom:12px;font-family:Newsreader,Georgia,serif;font-weight:400;font-size:1.2rem;color:var(--ink)">Architecture as trained</h3>
+  <p style="font-size:.84rem;color:var(--muted);margin-bottom:14px">Reproduced from the model summary in thesis Table 1. Input 256&times;256&times;3.</p>
+  <div class="scroll">
+    <table>
+      <thead><tr><th>Stage</th><th>Layers</th><th>Output shape</th><th>Parameters</th></tr></thead>
+      <tbody>
+        <tr><td>Encoder 1</td><td>conv2d, conv2d_1</td><td class="num">256 &times; 256 &times; 64</td><td class="num">1,792 + 36,928</td></tr>
+        <tr><td>Encoder 2</td><td>conv2d_2, conv2d_3</td><td class="num">128 &times; 128 &times; 128</td><td class="num">73,856 + 147,584</td></tr>
+        <tr><td>Encoder 3</td><td>conv2d_4, conv2d_5</td><td class="num">64 &times; 64 &times; 256</td><td class="num">295,168 + 590,080</td></tr>
+        <tr><td>Encoder 4</td><td>conv2d_6, conv2d_7</td><td class="num">32 &times; 32 &times; 512</td><td class="num">1,180,160 + 2,359,808</td></tr>
+        <tr class="best"><td>Bottleneck</td><td>conv2d_8, conv2d_9</td><td class="num">16 &times; 16 &times; 1024</td><td class="num">4,719,616 + 9,438,208</td></tr>
+        <tr><td>Decoder 4</td><td>conv2d_transpose, concatenate, conv2d_10, conv2d_11</td><td class="num">32 &times; 32 &times; 512</td><td class="num">2,097,664 + 4,719,104 + 2,359,808</td></tr>
+        <tr><td>Decoder 3</td><td>conv2d_transpose_1, concatenate_1, conv2d_12, conv2d_13</td><td class="num">64 &times; 64 &times; 256</td><td class="num">524,544 + 1,179,904 + 590,080</td></tr>
+        <tr><td>Decoder 2</td><td>conv2d_transpose_2, concatenate_2, conv2d_14, conv2d_15</td><td class="num">128 &times; 128 &times; 128</td><td class="num">131,200 + 295,040 + 147,584</td></tr>
+        <tr><td>Decoder 1</td><td>conv2d_transpose_3, concatenate_3, conv2d_16, conv2d_17</td><td class="num">256 &times; 256 &times; 64</td><td class="num">32,832 + 73,792 + 36,928</td></tr>
+        <tr><td>Output</td><td>conv2d_18, sigmoid</td><td class="num">256 &times; 256 &times; 1</td><td class="num">65</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="spec" style="margin-top:20px">
+    <div><dt>Total parameters</dt><dd>31,031,745 (118.38 MB)</dd></div>
+    <div><dt>Trainable</dt><dd>31,031,745</dd></div>
+    <div><dt>Non-trainable</dt><dd>0</dd></div>
+    <div><dt>Upsampling</dt><dd>Conv2DTranspose (learned)</dd></div>
+  </div>
+
+  <h3 style="margin-top:32px;margin-bottom:12px;font-family:Newsreader,Georgia,serif;font-weight:400;font-size:1.2rem;color:var(--ink)">Training configuration</h3>
+  <dl class="spec">
+    <div><dt>Framework</dt><dd>TensorFlow 2.15</dd></div>
+    <div><dt>Input</dt><dd>256 &times; 256, greyscale &rarr; 3 channels</dd></div>
+    <div><dt>Split</dt><dd>70 / 15 / 15 by field of view</dd></div>
+    <div><dt>Loss</dt><dd>0.5 &middot; BCE + 0.5 &middot; Dice</dd></div>
+    <div><dt>Optimiser</dt><dd>Adam, &beta;&#8321; 0.9, &beta;&#8322; 0.999</dd></div>
+    <div><dt>Learning rate</dt><dd>1 &times; 10&#8315;&sup3;</dd></div>
+    <div><dt>Scheduler</dt><dd>ReduceLROnPlateau, patience 5, factor 0.3</dd></div>
+    <div><dt>Batch size</dt><dd>8</dd></div>
+    <div><dt>Epochs</dt><dd>80, early stopping patience 12</dd></div>
+    <div><dt>Stability</dt><dd>Mixed precision, gradient clipping 1.0</dd></div>
+    <div><dt>Augmentation</dt><dd>Flips, &plusmn;15&deg; rotation, 0.9&ndash;1.1&times; zoom, elastic p=0.2, &plusmn;10% brightness/contrast</dd></div>
+    <div><dt>Post-processing</dt><dd>Threshold 0.5, 1-px opening, hole filling</dd></div>
+  </dl>
+
+  <div class="note" style="margin-top:22px">
+    <b>Why this is not running above.</b> The trained weights were not published with the project, so the U-Net cannot be executed in your browser and nothing on this page simulates it. The three panels are the thesis's own figures and the metrics are the thesis's own measurements on the held-out test set. The interactive tool higher up the page runs only the classical methods, and its numbers are computed live on a single image &mdash; the two are deliberately kept separate.
+  </div>
+</section>
+
+<section>
+  <div class="head"><div class="eyebrow">Pipeline &mdash; thesis &sect;2.1</div><h2>How one image becomes one score</h2></div>
+  <div class="scroll">
+    <svg viewBox="0 0 900 132" width="900" height="132" role="img" aria-label="Pipeline: input image, preprocessing, background removal, corrected image, comparison against the reference image, PSNR and SSIM, method comparison." style="max-width:100%;height:auto;min-width:660px">
+      <g font-family="IBM Plex Sans, sans-serif" font-size="12.5">
+        <g>
+          <rect x="1" y="34" width="112" height="46" rx="2" fill="var(--panel)" stroke="var(--rule)"></rect>
+          <text x="57" y="53" text-anchor="middle" fill="var(--ink)">Input image</text>
+          <text x="57" y="69" text-anchor="middle" fill="var(--muted)" font-family="IBM Plex Mono, monospace" font-size="10.5">256 &#215; 256</text>
+        </g>
+        <path d="M117 57 h22" stroke="var(--rule)" stroke-width="1.5" fill="none"></path>
+        <path d="M139 57 l-6 -3.5 v7 z" fill="var(--rule)"></path>
+        <g>
+          <rect x="143" y="34" width="124" height="46" rx="2" fill="var(--panel)" stroke="var(--rule)"></rect>
+          <text x="205" y="53" text-anchor="middle" fill="var(--ink)">Preprocessing</text>
+          <text x="205" y="69" text-anchor="middle" fill="var(--muted)" font-family="IBM Plex Mono, monospace" font-size="10.5">greyscale &#8594; [0,1]</text>
+        </g>
+        <path d="M271 57 h22" stroke="var(--rule)" stroke-width="1.5" fill="none"></path>
+        <path d="M293 57 l-6 -3.5 v7 z" fill="var(--rule)"></path>
+        <g>
+          <rect x="297" y="26" width="150" height="62" rx="2" fill="var(--accent-wash)" stroke="var(--accent)"></rect>
+          <text x="372" y="49" text-anchor="middle" fill="var(--ink)">Background removal</text>
+          <text x="372" y="65" text-anchor="middle" fill="var(--muted)" font-family="IBM Plex Mono, monospace" font-size="10.5">rolling ball / top-hat</text>
+          <text x="372" y="78" text-anchor="middle" fill="var(--muted)" font-family="IBM Plex Mono, monospace" font-size="10.5">/ U-Net</text>
+        </g>
+        <path d="M451 57 h22" stroke="var(--rule)" stroke-width="1.5" fill="none"></path>
+        <path d="M473 57 l-6 -3.5 v7 z" fill="var(--rule)"></path>
+        <g>
+          <rect x="477" y="34" width="116" height="46" rx="2" fill="var(--panel)" stroke="var(--rule)"></rect>
+          <text x="535" y="60" text-anchor="middle" fill="var(--ink)">Corrected image</text>
+        </g>
+        <path d="M597 57 h22" stroke="var(--rule)" stroke-width="1.5" fill="none"></path>
+        <path d="M619 57 l-6 -3.5 v7 z" fill="var(--rule)"></path>
+        <g>
+          <rect x="623" y="26" width="132" height="62" rx="2" fill="var(--panel)" stroke="var(--rule)"></rect>
+          <text x="689" y="49" text-anchor="middle" fill="var(--ink)">Evaluation</text>
+          <text x="689" y="65" text-anchor="middle" fill="var(--muted)" font-family="IBM Plex Mono, monospace" font-size="10.5">vs reference I_ref</text>
+          <text x="689" y="78" text-anchor="middle" fill="var(--muted)" font-family="IBM Plex Mono, monospace" font-size="10.5">PSNR &#183; SSIM</text>
+        </g>
+        <path d="M759 57 h22" stroke="var(--rule)" stroke-width="1.5" fill="none"></path>
+        <path d="M781 57 l-6 -3.5 v7 z" fill="var(--rule)"></path>
+        <g>
+          <rect x="785" y="34" width="114" height="46" rx="2" fill="var(--panel)" stroke="var(--rule)"></rect>
+          <text x="842" y="53" text-anchor="middle" fill="var(--ink)">Comparison</text>
+          <text x="842" y="69" text-anchor="middle" fill="var(--muted)" font-family="IBM Plex Mono, monospace" font-size="10.5">mean &#177; SD</text>
+        </g>
+      </g>
+    </svg>
+  </div>
+  <div class="prose" style="margin-top:20px">
+    <p>The evaluation step is the one that needs explaining. Real microscopy data has no ground-truth background-free image, so scoring a method against its own input would measure how much it changed the image, not whether the change was correct. A per-field-of-view reference is constructed instead: normalise, estimate the illumination field by morphological opening at radius 80&nbsp;px, smooth it with a 2D third-order polynomial surface, subtract, then histogram-match back to the original so intensity statistics stay comparable. Every method is scored against that.</p>
+  </div>
+</section>
+
+<section>
+  <div class="head"><div class="eyebrow">Dataset &mdash; thesis &sect;2.2</div><h2>MiniGlioma&ndash;Usiigaci</h2></div>
+  <dl class="spec">
+    <div><dt>Dataset</dt><dd>MiniGlioma&ndash;Usiigaci (integrated)</dd></div>
+    <div><dt>Modality</dt><dd>Phase contrast &amp; DIC</dd></div>
+    <div><dt>Image size</dt><dd>256 &times; 256</dd></div>
+    <div><dt>Split</dt><dd>70 / 15 / 15 by field of view</dd></div>
+    <div><dt>Access</dt><dd>Publicly available microscopy data</dd></div>
+    <div><dt>Image count</dt><dd style="color:var(--muted)">not stated in thesis</dd></div>
+  </dl>
+  <div class="prose" style="margin-top:20px">
+    <p><b>The split is by field of view, not by image.</b> Patches drawn from the same field share an illumination gradient and often the same cells, so splitting by image would leak that structure across the train/test boundary and inflate the test score. This is the single most consequential methodological decision in the study.</p>
+    <p>Preprocessing: greyscale conversion, normalisation to [0,&nbsp;1], optional histogram equalisation for visual inspection, border-artefact handling and intensity-clipping treatment, and removal of duplicate and corrupted frames. Optional median 3&times;3 or Gaussian &sigma;=0.5 smoothing was available in the parameter study.</p>
+  </div>
+</section>
+
+<section id="results">
+  <div class="head"><div class="eyebrow">Results &mdash; thesis &sect;3.2, Table 3.1</div><h2>Only one method cleared both thresholds</h2></div>
+  <div class="scroll">
+    <table>
+      <thead><tr><th>Method</th><th>PSNR (dB)</th><th>SSIM</th><th>PSNR &ge; 26</th><th>SSIM &ge; 0.80</th><th>Passes</th></tr></thead>
+      <tbody>
+        <tr><td>Rolling ball / opening</td><td class="num">24.1 &plusmn; 1.3</td><td class="num">0.72 &plusmn; 0.04</td><td>No</td><td>No</td><td>No</td></tr>
+        <tr><td>Morphological (white top-hat)</td><td class="num">25.6 &plusmn; 1.1</td><td class="num">0.78 &plusmn; 0.03</td><td>No</td><td>No</td><td>No</td></tr>
+        <tr class="best"><td>U-Net (retrained)</td><td class="num">28.4 &plusmn; 0.9</td><td class="num">0.86 &plusmn; 0.02</td><td>Yes</td><td>Yes</td><td>Yes</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p style="font-size:.84rem;color:var(--muted);margin-top:10px">Mean &plusmn; SD on the held-out test set. Acceptance criteria were fixed before the experiment: PSNR &ge; 26 dB and SSIM &ge; 0.80.</p>
+
+  <div style="margin-top:30px" class="scroll">
+    <svg viewBox="0 0 700 218" width="700" height="218" role="img" aria-label="Bar chart of PSNR by method. Rolling ball 24.1 decibels, white top-hat 25.6 decibels, U-Net 28.4 decibels. The acceptance threshold is 26 decibels; only the U-Net exceeds it." style="max-width:100%;height:auto;min-width:520px">
+      <g font-family="IBM Plex Sans, sans-serif" font-size="12">
+        <text x="0" y="12" fill="var(--muted)" font-family="IBM Plex Mono, monospace" font-size="10.5" letter-spacing="1">PSNR (dB) &#183; MEAN &#177; SD</text>
+        <line x1="170" y1="30" x2="170" y2="174" stroke="var(--rule)"></line>
+        <line x1="170" y1="174" x2="680" y2="174" stroke="var(--rule)"></line>
+        <g fill="var(--muted)" font-family="IBM Plex Mono, monospace" font-size="10.5" text-anchor="middle">
+          <text x="170" y="190">20</text><text x="272" y="190">22</text><text x="374" y="190">24</text>
+          <text x="476" y="190">26</text><text x="578" y="190">28</text><text x="680" y="190">30</text>
+        </g>
+        <line x1="476" y1="24" x2="476" y2="174" stroke="var(--accent)" stroke-width="1.5" stroke-dasharray="4 3"></line>
+        <text x="482" y="21" fill="var(--accent-ink)" font-family="IBM Plex Mono, monospace" font-size="10.5">threshold 26 dB</text>
+
+        <text x="162" y="55" text-anchor="end" fill="var(--body)">Rolling ball</text>
+        <rect x="170" y="42" width="209" height="20" fill="var(--panel2)" stroke="var(--rule)"></rect>
+        <line x1="313" y1="52" x2="445" y2="52" stroke="var(--muted)" stroke-width="1"></line>
+        <line x1="313" y1="47" x2="313" y2="57" stroke="var(--muted)"></line><line x1="445" y1="47" x2="445" y2="57" stroke="var(--muted)"></line>
+        <text x="389" y="56" fill="var(--body)" font-family="IBM Plex Mono, monospace" font-size="11.5">24.1</text>
+
+        <text x="162" y="100" text-anchor="end" fill="var(--body)">White top-hat</text>
+        <rect x="170" y="87" width="286" height="20" fill="var(--panel2)" stroke="var(--rule)"></rect>
+        <line x1="400" y1="97" x2="512" y2="97" stroke="var(--muted)" stroke-width="1"></line>
+        <line x1="400" y1="92" x2="400" y2="102" stroke="var(--muted)"></line><line x1="512" y1="92" x2="512" y2="102" stroke="var(--muted)"></line>
+        <text x="466" y="101" fill="var(--body)" font-family="IBM Plex Mono, monospace" font-size="11.5">25.6</text>
+
+        <text x="162" y="145" text-anchor="end" fill="var(--ink)" font-weight="600">U-Net</text>
+        <rect x="170" y="132" width="428" height="20" fill="var(--accent)"></rect>
+        <line x1="552" y1="142" x2="644" y2="142" stroke="var(--muted)" stroke-width="1"></line>
+        <line x1="552" y1="137" x2="552" y2="147" stroke="var(--muted)"></line><line x1="644" y1="137" x2="644" y2="147" stroke="var(--muted)"></line>
+        <text x="608" y="146" fill="var(--ink)" font-family="IBM Plex Mono, monospace" font-size="11.5" font-weight="500">28.4</text>
+
+        <text x="0" y="212" fill="var(--muted)" font-size="11">Whiskers show &#177;1 SD. Only the U-Net clears the threshold, and it does so with the narrowest spread.</text>
+      </g>
+    </svg>
+  </div>
+</section>
+
+<section>
+  <div class="head"><div class="eyebrow">Interpretation &mdash; thesis &sect;4.5</div><h2>What the numbers mean</h2></div>
+  <div class="prose">
+    <p><b>The U-Net performed best and was the only method to meet both criteria</b> &mdash; 28.4 dB and 0.86, against thresholds of 26 dB and 0.80. The two classical methods fell short, and they fell short for reasons that match their mechanics rather than looking like random failure.</p>
+    <p>Rolling ball is lowest on both. It estimates the background from the image itself, so anything low in contrast is indistinguishable from background and is subtracted along with it. Visual inspection confirms this: gradient correction is good, faint structures are lost.</p>
+    <p>White top-hat improves on it by 1.5 dB and 0.06 SSIM because it works on local structure rather than one global surface. But it amplifies high-frequency content indiscriminately, and noise is high-frequency content. Its margin to the SSIM threshold is only 0.02 &mdash; close enough that a different structuring element could plausibly cross it, which is worth stating rather than glossing over.</p>
+    <p>The U-Net's spread matters as much as its mean. At &plusmn;0.9 dB and &plusmn;0.02 SSIM it is the tightest of the three, meaning performance is consistent across fields of view rather than excellent on some and poor on others.</p>
+    <p>What this does <em>not</em> show: that deep learning is the right choice in general. The classical methods are seconds of compute, no training data, no GPU. When the correction needed is a simple illumination gradient and the structures of interest are well contrasted, they remain the correct engineering choice. It also does not show clinical validity &mdash; this is a methods comparison on one public dataset, not a validated clinical tool.</p>
+  </div>
+</section>
+
+<section>
+  <div class="head"><div class="eyebrow">Validation &mdash; thesis &sect;2.5.1</div><h2>Testing whether the result survives its own parameters</h2></div>
+  <div class="prose" style="margin-bottom:20px">
+    <p>The reference image the methods are scored against is itself constructed, and its construction has free parameters. A ranking that changes when those parameters change is not a ranking. So the reference was rebuilt across a range of settings and the metrics re-measured.</p>
+  </div>
+  <div class="scroll">
+    <table>
+      <thead><tr><th>Parameter varied</th><th>Range tested</th><th>Effect on PSNR</th><th>Effect on SSIM</th></tr></thead>
+      <tbody>
+        <tr><td>Opening radius</td><td class="num">60&ndash;100 px</td><td class="num">&lt; 0.3 dB</td><td class="num">&lt; 0.01</td></tr>
+        <tr><td>Gaussian &sigma;</td><td class="num">30&ndash;40</td><td class="num">&lt; 0.3 dB</td><td class="num">&lt; 0.01</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="prose" style="margin-top:20px">
+    <p>Both variations are smaller than the gap between any two methods, so the ranking is not an artefact of how the reference was built. The parameter study also swept rolling-ball and opening radii at {30, 50, 80} px and top-hat at {5, 15, 25} px.</p>
+    <p>This is methodological robustness testing on one dataset. It is not clinical validation, and nothing here has been assessed against a clinical endpoint or reviewed by a regulatory body.</p>
+  </div>
+</section>
+
+<section>
+  <div class="head"><div class="eyebrow">Reproducibility &mdash; thesis &sect;2.8</div><h2>Environment, versions and seeds</h2></div>
+  <dl class="spec">
+    <div><dt>OS</dt><dd>Ubuntu 22.04 / Win 11 + WSL2</dd></div>
+    <div><dt>Python</dt><dd>3.10</dd></div>
+    <div><dt>CUDA</dt><dd>12.1</dd></div>
+    <div><dt>TensorFlow</dt><dd>2.15</dd></div>
+    <div><dt>opencv-python</dt><dd>4.8</dd></div>
+    <div><dt>scikit-image</dt><dd>0.22</dd></div>
+    <div><dt>numpy / scipy</dt><dd>1.26 / 1.11</dd></div>
+    <div><dt>albumentations</dt><dd>1.4</dd></div>
+    <div><dt>matplotlib</dt><dd>3.8</dd></div>
+    <div><dt>tensorboard</dt><dd>2.17</dd></div>
+  </dl>
+  <pre style="margin-top:20px"># seeds, as fixed in the thesis
+PYTHONHASHSEED=0
+np.random.seed(42)
+tf.random.set_seed(42)
+
+# split: train 70% / val 15% / test 15%, by field of view (no leakage)
+
+git clone https://github.com/lokesh-rajagopal/microscopy-background-removal
+pip install -r requirements.txt
+python src/unet/train.py --data data/miniglioma_usiigaci
+python src/run_comparison.py --data data/miniglioma_usiigaci/test --out results/</pre>
+  <div class="note" style="margin-top:18px">
+    <b>One caveat on the repository.</b> The code there is a clean reference implementation of the methods and evaluation protocol described in the thesis. It is not a dump of the original notebooks, and the trained weights are not included, so <span class="mono">run_comparison.py</span> evaluates the classical methods and skips the U-Net unless you supply your own checkpoint.
+  </div>
+</section>
+
+<section>
+  <div class="head"><div class="eyebrow">Limitations &mdash; thesis &sect;2.7</div><h2>What this work does not settle</h2></div>
+  <ul class="clean" style="max-width:66ch">
+    <li>The classical methods are sensitive to parameterisation and do not transfer uniformly across datasets with different contrast and lighting ranges. Irregular background structure in phase contrast and DIC remains difficult for them.</li>
+    <li>The U-Net is more robust but needs substantial training data and compute. The composition and quality of the training set directly determine output quality, and overfitting is a live risk where ground-truth labels are limited or inconsistent.</li>
+    <li>No real-time performance benchmark was run, so scalability to high-throughput applications is unassessed.</li>
+    <li>One dataset, one modality pairing, one magnification regime. Generalisability was a research question this study could only partly answer.</li>
+    <li>The reference image is constructed rather than measured. It is a defensible proxy for a flat-background ground truth, not a ground truth.</li>
+    <li>PSNR and SSIM measure reconstruction fidelity, not downstream segmentation accuracy. A method can win on both and still not be the best preprocessing choice for a given segmentation task.</li>
+  </ul>
+</section>
+
+<section>
+  <div class="head"><div class="eyebrow">Future work &mdash; thesis &sect;4.12</div><h2>Where this would go next</h2></div>
+  <ul class="clean" style="max-width:66ch">
+    <li><b>Larger and more diverse datasets</b> &mdash; multiple cell types, imaging conditions and magnifications, to test and improve generalisation.</li>
+    <li><b>Self-supervised or unsupervised learning</b> &mdash; contrastive learning or autoencoders, to remove the annotation bottleneck that limits the supervised approach.</li>
+    <li><b>Deployment optimisation</b> &mdash; pruning, quantisation and GPU/TPU acceleration for real-time inference.</li>
+    <li><b>End-to-end pipeline integration</b> &mdash; connecting background removal directly to segmentation, tracking and phenotypic analysis rather than treating it as a separate step.</li>
+    <li><b>Domain-specific evaluation measures</b> &mdash; object-level accuracy or feature preservation, since PSNR and SSIM have limited biological relevance for detection tasks.</li>
+    <li><b>Hybrid models</b> &mdash; morphological preprocessing feeding a neural network, for better interpretability and edge-case handling.</li>
+  </ul>
+  <div class="note" style="margin-top:20px"><b>Not from the thesis:</b> publishing the trained weights and a hosted inference demo would let the U-Net run in the browser alongside the classical methods above. That is a reasonable next step, listed here as a suggestion rather than a thesis recommendation.</div>
+</section>
+
+<footer>
+  <div class="wrap" style="padding-inline:0">
+    <p style="color:var(--ink);font-weight:500;margin-bottom:6px">Lokeshkumar Rajagopal</p>
+    <p style="margin-bottom:16px">MSc Biomedical Engineering, University of Strathclyde, Glasgow &middot; 2024&ndash;2025</p>
+    <p>
+      <a href="https://github.com/lokesh-rajagopal/microscopy-background-removal" target="_blank" rel="noopener">GitHub repository</a>
+      <a href="https://linkedin.com/in/lokesh29" target="_blank" rel="noopener">LinkedIn</a>
+      <a href="https://github.com/lokesh-rajagopal" target="_blank" rel="noopener">All projects</a>
+    </p>
+    <p style="margin-top:18px;font-size:.8rem">Figures reproduced from the MSc thesis. Quantitative results are those reported in the thesis and are unmodified. Keywords: biomedical engineering, medical imaging, image processing, phase contrast microscopy, DIC microscopy, Python, TensorFlow, OpenCV, U-Net, computer vision, image segmentation, background removal.</p>
+  </div>
+</footer>
+
+</div>
+<script src="js/demo.js"></script>
+</body>
+</html>
